@@ -5,6 +5,7 @@ import axios from "axios";
 import { indexDocument, generateEmbedding } from "./rag/index.js";
 import { connectToVectorDB, openTable, tableSearch } from "./db/index.js";
 import { Table } from "vectordb";
+import { rankingResponses } from "./rerank/index.js";
 
 // --- Interfaces ---
 interface SearchResult {
@@ -17,7 +18,7 @@ interface SearchResult {
 const OLLAMA_URL = "http://localhost:11434";
 const LLM_MODEL = "mistral:7b-instruct";
 const COLLECTION_NAME = "documents";
-const TEXTCHUNKWIDE = 4;
+const TEXTCHUNKWIDE = 2;
 
 async function askQuestion(question: string): Promise<void> {
   const db = await connectToVectorDB();
@@ -26,7 +27,7 @@ async function askQuestion(question: string): Promise<void> {
   const queryEmbedding = await generateEmbedding(question);
 
   // En 'vectordb' (JS), .execute() devuelve directamente un Array
-  const results = await tableSearch(table, queryEmbedding);
+  const results = await tableSearch(table, queryEmbedding, 6);
   
   if (results.length === 0) {
     console.log("⚠️ No se encontró información relevante.");
@@ -52,15 +53,23 @@ async function askQuestion(question: string): Promise<void> {
       .execute() as SearchResult[];
 
     neighbors.sort((a, b) => a.id - b.id);
-    neighbors.forEach(n => contextChunks.add(n.text));
-  }
+    const enrichedText = neighbors
+        .map(n => n.text)
+        .join(" "); // O "\n" si prefieres separar los párrafos
 
-  const finalContext = Array.from(contextChunks).join("\n---\n");
+    // 4. Añadimos el bloque completo (Texto + Anterior + Posterior) al Set
+    if (enrichedText.trim().length > 0) {
+      contextChunks.add(enrichedText);
+    }
+  }
+  const reRankedContextChunks = await rankingResponses(question, Array.from(contextChunks));
+  const finalContext = Array.from(reRankedContextChunks).join("\n---\n");
 
   try {
     const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
       model: LLM_MODEL,
-      prompt: `Usa el CONTEXTO para responder la PREGUNTA.\n\nCONTEXTO:\n${finalContext}\n\nPREGUNTA: ${question}`,
+      prompt: `Usa el CONTEXTO para responder la PREGUNTA, no te inventes nada ni hagas suposiciones, responde
+      con la información contenida en el CONTEXTO!.\n\nCONTEXTO:\n${finalContext}\n\nPREGUNTA: ${question}`,
       stream: false
     });
 
@@ -99,5 +108,11 @@ async function main(): Promise<void> {
 }
 
 main();
+
+
+//Mejoras:
+//Ajusta modelo, temperatura y ks
+//Ajusta el contexto
+//Ajusta el ranking, para que si no devuelve respuestas ajustadas, no haya respuesta por parte del modelo => ahorro de costes.
 
 
