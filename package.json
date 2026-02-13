@@ -1,0 +1,27 @@
+{
+  "name": "rag-local",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx main.ts",
+    "build": "tsc",
+    "start": "node dist/main.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "RAG local con LanceDB y Ollama",
+  "dependencies": {
+    "apache-arrow": "^13.0.0",
+    "axios": "^1.13.5",
+    "pdf-parse-fork": "^1.2.0",
+    "pdfreader": "^3.0.8",
+    "vectordb": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x.x",
+    "tsx": "^4.x.x",
+    "typescript": "^5.x.x"
+  }
+}
