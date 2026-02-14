@@ -4,9 +4,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "dev": "tsx main.ts",
-    "build": "tsc",
-    "start": "node dist/main.js"
+    "dev": "tsx --env-file=.env index.ts",
+    "indexar": "tsx --env-file=.env scripts/indexDocument.ts",
+    "start": "node --env-file=.env dist/index.js"
   },
   "keywords": [],
   "author": "",

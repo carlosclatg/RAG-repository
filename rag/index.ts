@@ -12,8 +12,9 @@ interface EmbeddingResponse {
 
 interface VectorRow {
   id: number;
-  vector: number[]; // LanceDB reconocerá esto como un Float32Array internamente
+  vector: number[];
   text: string;
+  chapter: string;
 }
 
 // --- Configuración ---
@@ -21,63 +22,57 @@ const EMBEDDING_MODEL: string = "nomic-embed-text";
 const OLLAMA_URL: string = "http://localhost:11434";
 const COLLECTION_NAME: string = "documents";
 
-/**
- * Procesa un documento, genera embeddings y los guarda en la base de datos.
- */
 export async function indexDocument(path: string): Promise<void> {
-  console.log("📄 Extrayendo contenido del documento...");
-  
-  // Nota: Si el archivo es TXT usamos readFileSync, si es PDF usamos extractPDF
-  let text: string = ""
-  if (path.endsWith('.pdf')) {
-    //text = await extractPDF(path);
-  } else {
-    text = fs.readFileSync(path, 'utf8');
-  }
-  
-  // Chunks por frases
-  console.log("Dividiendo en fragmentos (chunks)...");
-  const chunks: string[] = recursiveChunkingBySentences(text);
+  console.log("Extrayendo contenido...");
+  const fullText: string = fs.readFileSync(path, 'utf8');
 
-  console.log("Conectando a LanceDB...");
-  const db: lancedb.Connection = await connectToVectorDB();
-
+  // 1. Split by chapters and detect the chapter strings. "Capítulo X: Título"
+  const chapterRegex = /(Capítulo\s+\d+:?\s*[^\n]+)/gi;
+  const sections = fullText.split(chapterRegex);
+  
   const rows: VectorRow[] = [];
-  
-  for (let i = 0; i < chunks.length; i++) {
-    const embedding: number[] = await generateEmbedding(chunks[i]);
-    
-    // Validación de dimensiones (Nomic suele ser 768)
-    if (embedding?.length !== 768) {
-      console.warn(`⚠️ Embedding omitido en índice ${i}: dimensión incorrecta (${embedding?.length})`);
+  let globalChunkIndex = 0;
+  let currentChapterTitle = "Introducción / Prólogo";
+
+  console.log("Procesando secciones y generando chunks enriquecidos...");
+
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i].trim();
+    if (!section) continue;
+
+    if (section.match(chapterRegex)) {
+      currentChapterTitle = section;
       continue;
     }
 
-    rows.push({
-      id: i,
-      vector: Array.from(embedding), // Nos aseguramos de que sea un array de números puro
-      text: chunks[i]
-    });
-  }
-  
-  console.log(`\n✅ ${rows.length} Embeddings generados.`);
+    // 2. Chunks by sentences in current chapter
+    const subChunks: string[] = recursiveChunkingBySentences(section);
 
-  const tableNames: string[] = await db.tableNames();
-  let table: lancedb.Table;
+    for (const subChunk of subChunks) {
+      const embedding: number[] = await generateEmbedding(subChunk);
+      
+      if (embedding?.length === 768) {
+        rows.push({
+          id: globalChunkIndex++,
+          vector: Array.from(embedding),
+          text: subChunk,
+          chapter: currentChapterTitle //add title of chapter as metadata
+        });
+      }
+    }
+  }
+
+  const db = await connectToVectorDB();
+  const tableNames = await db.tableNames();
 
   if (tableNames.includes(COLLECTION_NAME)) {
-    console.log("➕ La tabla ya existe. (Lógica de añadir comentada)");
-    // table = await db.openTable(COLLECTION_NAME);
-    // await table.add(rows);
+    const table = await db.openTable(COLLECTION_NAME);
+    await table.add(rows);
   } else {
-    console.log("🆕 Creando nueva tabla...");
-    table = await db.createTable(COLLECTION_NAME, rows);
+    await db.createTable(COLLECTION_NAME, rows);
   }
 }
 
-/**
- * Genera el vector numérico de un texto usando Ollama.
- */
 export async function generateEmbedding(text: string): Promise<number[]> {
   try {
     const response: AxiosResponse<EmbeddingResponse> = await axios.post(`${OLLAMA_URL}/api/embeddings`, {
@@ -86,21 +81,8 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     });
     return response.data.embedding;
   } catch (error: any) {
-    console.error("❌ Error al generar embedding. ¿Está Ollama corriendo?");
+    console.error("Error while generating embedding.");
+    console.error(error);
     throw error;
   }
 }
-
-/**
- * Extrae texto de un archivo PDF.
- */
-// async function extractPDF(path: string): Promise<string> {
-//   try {
-//     const buffer: Buffer = fs.readFileSync(path);
-//     const data: any = await pdf(buffer); // pdf-parse no suele tener tipos oficiales
-//     return data.text;
-//   } catch (error: any) {
-//     console.error("❌ Error al leer el PDF:", error.message);
-//     throw error;
-//   }
-// }

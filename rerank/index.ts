@@ -8,9 +8,8 @@ export async function rankingResponses(query: string, possibleResponses: string[
         "top_n": 3
     })
     const apiKey = process.env.COHERE_API_KEY;
-
     if (!apiKey) {
-        throw new Error("Falta la variable de entorno COHERE_API_KEY");
+        throw new Error("Missing env variable COHERE_API_KEY");
     }
     const response = await fetch("https://api.cohere.com/v2/rerank", {
     method: "POST",
@@ -21,7 +20,6 @@ export async function rankingResponses(query: string, possibleResponses: string[
     body: bodyBuild,
     });
     const body = await response.json();
-    console.log(body);
 
     if (response.status != 200) {
         return Promise.reject(body);

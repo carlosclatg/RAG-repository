@@ -3,18 +3,16 @@ import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import axios from "axios";
 import { indexDocument, generateEmbedding } from "./rag/index.js";
-import { connectToVectorDB, openTable, tableSearch } from "./db/index.js";
-import { Table } from "vectordb";
+import { connectToVectorDB } from "./db/index.js";
 import { rankingResponses } from "./rerank/index.js";
 
-// --- Interfaces ---
 interface SearchResult {
   id: number;
   text: string;
   _distance?: number;
+  chapter: string;
 }
 
-// --- Configuración ---
 const OLLAMA_URL = "http://localhost:11434";
 const LLM_MODEL = "mistral:7b-instruct";
 const COLLECTION_NAME = "documents";
@@ -22,49 +20,54 @@ const TEXTCHUNKWIDE = 2;
 
 async function askQuestion(question: string): Promise<void> {
   const db = await connectToVectorDB();
-  const table = await openTable(COLLECTION_NAME);
-  
-  const queryEmbedding = await generateEmbedding(question);
+  const table = await db.openTable(COLLECTION_NAME);
+  const queryEmbedding: number[] = await generateEmbedding(question);
 
-  // En 'vectordb' (JS), .execute() devuelve directamente un Array
-  const results = await tableSearch(table, queryEmbedding, 6);
-  
+  // In 'vectordb' (JS), .execute() returns an Array directly
+  const results: SearchResult[] = await table
+    .search(queryEmbedding)
+    .limit(3)
+    .execute();
+
   if (results.length === 0) {
-    console.log("⚠️ No se encontró información relevante.");
+    console.log("No relevant information found.");
     return;
   }
 
-  const contextChunks = new Set<string>();
+  const contextChunks: Set<string> = new Set<string>();
 
   for (const res of results) {
-    const idx = Number(res.id);
+    const idx: number = Number(res.id);
     if (isNaN(idx)) {
       contextChunks.add(res.text);
       continue;
     }
+    const totalRows: number = await table.countRows();
+    const start: number = Math.max(0, idx - TEXTCHUNKWIDE);
+    const end: number = Math.min(totalRows, idx + TEXTCHUNKWIDE);
 
-    const totalRows = await table.countRows();
-    const start = Math.max(0, idx - TEXTCHUNKWIDE);
-    const end = Math.min(totalRows, idx + TEXTCHUNKWIDE);
-
-    // Búsqueda de vecinos: también devuelve un Array directo
-    const neighbors = await table
-      .filter(`id >= ${start} AND id <= ${end}`)
-      .execute() as SearchResult[];
-
+    const neighbors: SearchResult[] = await table
+      .filter(`id >= ${start} AND id <= ${end} AND chapter = '${res.chapter}'`) //only same chapter context
+      .execute();
+    
     neighbors.sort((a, b) => a.id - b.id);
-    const enrichedText = neighbors
-        .map(n => n.text)
-        .join(" "); // O "\n" si prefieres separar los párrafos
 
-    // 4. Añadimos el bloque completo (Texto + Anterior + Posterior) al Set
+    const enrichedText: string = `[CONTEXTO: Información extraída del ${res.chapter}] y el contenido es:\n` + 
+      neighbors
+        .map(n => n.text)
+        .join(" ");
+
     if (enrichedText.trim().length > 0) {
       contextChunks.add(enrichedText);
     }
   }
-  const reRankedContextChunks = await rankingResponses(question, Array.from(contextChunks));
-  const finalContext = Array.from(reRankedContextChunks).join("\n---\n");
-
+  const reRankedContextChunks: string[] = await rankingResponses(question, Array.from(contextChunks));
+  if (reRankedContextChunks.length === 0) {
+    console.log("No relevant information found.");
+    return;
+  }
+  const finalContext: string = Array.from(reRankedContextChunks).join("\n---\n");
+  console.log(finalContext.length)
   try {
     const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
       model: LLM_MODEL,
@@ -73,18 +76,18 @@ async function askQuestion(question: string): Promise<void> {
       stream: false
     });
 
-    console.log("\n🧠 RESPUESTA:\n" + response.data.response);
+    console.log("\nRESPUESTA del LLM local:\n" + response.data.response);
   } catch (error: any) {
-    console.error("❌ Error en Ollama:", error.message);
+    console.error("Error en Ollama:", error.message);
   }
 }
 
 async function main(): Promise<void> {
   try {
     const archivoALeer = "/home/msi/Desktop/AI/RAG/rag-local/texto.txt"; 
-    
+    console.log(process.env.COHERE_API_KEY);
     if (!fs.existsSync(archivoALeer)) {
-      console.error(`❌ El archivo ${archivoALeer} no existe.`);
+      console.error(`El archivo ${archivoALeer} no existe.`);
       return;
     }
 
@@ -92,10 +95,10 @@ async function main(): Promise<void> {
     await indexDocument(archivoALeer);
     
     const rl = readline.createInterface({ input, output });
-    console.log("\n✅ Sistema listo. Escribe 'salir' para terminar.");
+    console.log("\nSistema listo. Escribe 'salir' para terminar.");
 
     while (true) {
-      const pregunta = await rl.question("\n❓ Haz tu pregunta: ");
+      const pregunta = await rl.question("\nHaz tu pregunta: ");
       if (["salir", "exit", "quit"].includes(pregunta.toLowerCase())) break;
       if (!pregunta.trim()) continue;
 
@@ -103,7 +106,7 @@ async function main(): Promise<void> {
     }
     rl.close();
   } catch (error) {
-    console.error("🔴 Error crítico:", error);
+    console.error("Error crítico:", error);
   }
 }
 
