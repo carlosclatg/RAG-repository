@@ -1,4 +1,4 @@
-import * as lancedb from "vectordb";
+import * as lancedb from "@lancedb/lancedb";
 
 const DB_PATH: string = "./data";
 
@@ -14,10 +14,4 @@ export async function connectToVectorDB(): Promise<lancedb.Connection> {
 export async function openTable(collectionName: string) : Promise<lancedb.Table> {
     return await instance.openTable(collectionName);
 
-}
-
-export async function tableSearch(table: lancedb.Table<number[]>, 
-    queryEmbedding: number[], limit = 3): Promise<Record<string, unknown>[]> {
-   
-    return table.search(queryEmbedding).limit(limit).execute();
 }

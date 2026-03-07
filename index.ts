@@ -5,6 +5,7 @@ import axios from "axios";
 import { indexDocument, generateEmbedding } from "./rag/index.js";
 import { connectToVectorDB } from "./db/index.js";
 import { rankingResponses } from "./rerank/index.js";
+import { generateResponse, GeneratorResult, HYBRID_MODE, selectRAGMode, SEMANTINC_MODE } from "./llm/index.js";
 
 interface SearchResult {
   id: number;
@@ -13,7 +14,6 @@ interface SearchResult {
   chapter: string;
 }
 
-const OLLAMA_URL = "http://localhost:11434";
 const LLM_MODEL = "mistral:7b-instruct";
 const COLLECTION_NAME = "documents";
 const TEXTCHUNKWIDE = 2;
@@ -23,11 +23,23 @@ async function askQuestion(question: string): Promise<void> {
   const table = await db.openTable(COLLECTION_NAME);
   const queryEmbedding: number[] = await generateEmbedding(question);
 
-  // In 'vectordb' (JS), .execute() returns an Array directly
-  const results: SearchResult[] = await table
-    .search(queryEmbedding)
+  const modeSelection = await selectRAGMode(question);
+  const { mode, filter } = JSON.parse(modeSelection);
+
+  let results: SearchResult[] = [];
+  if (mode === SEMANTINC_MODE) {
+    results = await table
+    .search(queryEmbedding) // Busca por significado (Vector)
     .limit(3)
-    .execute();
+    .toArray();  
+  }
+  if (mode === HYBRID_MODE) {
+    results = await table
+    .search(queryEmbedding) // Busca por significado (Vector)
+    .where(`text LIKE '%${filter}%'`) // Filtra por palabra exacta (FTS)
+    .limit(3)
+    .toArray();  
+  }
 
   if (results.length === 0) {
     console.log("No relevant information found.");
@@ -45,13 +57,12 @@ async function askQuestion(question: string): Promise<void> {
     const totalRows: number = await table.countRows();
     const start: number = Math.max(0, idx - TEXTCHUNKWIDE);
     const end: number = Math.min(totalRows, idx + TEXTCHUNKWIDE);
+    const neighbors : SearchResult[]  = await table
+                        .query()
+                        .where(`id >= ${start} AND id <= ${end} AND chapter = '${res.chapter}'`)
+                        .toArray();
 
-    const neighbors: SearchResult[] = await table
-      .filter(`id >= ${start} AND id <= ${end} AND chapter = '${res.chapter}'`) //only same chapter context
-      .execute();
-    
     neighbors.sort((a, b) => a.id - b.id);
-
     const enrichedText: string = `[CONTEXTO: Información extraída del ${res.chapter}] y el contenido es:\n` + 
       neighbors
         .map(n => n.text)
@@ -67,25 +78,19 @@ async function askQuestion(question: string): Promise<void> {
     return;
   }
   const finalContext: string = Array.from(reRankedContextChunks).join("\n---\n");
-  console.log(finalContext.length)
-  try {
-    const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
-      model: LLM_MODEL,
-      prompt: `Usa el CONTEXTO para responder la PREGUNTA, no te inventes nada ni hagas suposiciones, responde
-      con la información contenida en el CONTEXTO!.\n\nCONTEXTO:\n${finalContext}\n\nPREGUNTA: ${question}`,
-      stream: false
-    });
+  const result : GeneratorResult = await generateResponse(question, finalContext);
 
-    console.log("\nRESPUESTA del LLM local:\n" + response.data.response);
-  } catch (error: any) {
-    console.error("Error en Ollama:", error.message);
+  if (result.success) {
+      console.log("Respuesta:", result.data);
+  } else {
+      // Aquí decides qué mostrar al usuario final
+      console.error("Hubo un problema:", result.error);
   }
 }
 
 async function main(): Promise<void> {
   try {
     const archivoALeer = "/home/msi/Desktop/AI/RAG/rag-local/texto.txt"; 
-    console.log(process.env.COHERE_API_KEY);
     if (!fs.existsSync(archivoALeer)) {
       console.error(`El archivo ${archivoALeer} no existe.`);
       return;

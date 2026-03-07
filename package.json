@@ -6,18 +6,19 @@
   "scripts": {
     "dev": "tsx --env-file=.env index.ts",
     "indexar": "tsx --env-file=.env scripts/indexDocument.ts",
-    "start": "node --env-file=.env dist/index.js"
+    "start": "node --env-file=.env dist/index.js",
+    "run": "npx tsx index.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "RAG local con LanceDB y Ollama",
   "dependencies": {
-    "apache-arrow": "^13.0.0",
+    "@lancedb/lancedb": "^0.26.2",
+    "apache-arrow": "^17.0.0",
     "axios": "^1.13.5",
     "pdf-parse-fork": "^1.2.0",
-    "pdfreader": "^3.0.8",
-    "vectordb": "^0.21.2"
+    "pdfreader": "^3.0.8"
   },
   "devDependencies": {
     "@types/node": "^20.x.x",

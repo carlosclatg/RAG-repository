@@ -4,6 +4,7 @@ import * as fs from "fs";
 import { connectToVectorDB } from "../db/index.ts";
 import * as lancedb from "vectordb";
 import axios, { AxiosResponse } from "axios";
+import { Index } from '@lancedb/lancedb';
 
 // --- Interfaces ---
 interface EmbeddingResponse {
@@ -68,9 +69,19 @@ export async function indexDocument(path: string): Promise<void> {
   if (tableNames.includes(COLLECTION_NAME)) {
     const table = await db.openTable(COLLECTION_NAME);
     await table.add(rows);
+    await table.createIndex("text", {
+      config: Index.fts(), // Helper para configurar FTS
+    });
+    console.log(table.listIndices());
   } else {
-    await db.createTable(COLLECTION_NAME, rows);
+    const table = await db.createTable(COLLECTION_NAME, rows);
+    await table.createIndex("text", {
+      config: Index.fts(), // Helper para configurar FTS
+      replace: true
+    });
+    console.log(await table.listIndices());
   }
+  console.log("Documento indexado.");
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {

@@ -9,7 +9,7 @@ export async function rankingResponses(query: string, possibleResponses: string[
     })
     const apiKey = process.env.COHERE_API_KEY;
     if (!apiKey) {
-        throw new Error("Missing env variable COHERE_API_KEY");
+        return Promise.resolve(possibleResponses);
     }
     const response = await fetch("https://api.cohere.com/v2/rerank", {
     method: "POST",
