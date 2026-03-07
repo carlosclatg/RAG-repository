@@ -7,7 +7,10 @@
     "dev": "tsx --env-file=.env index.ts",
     "indexar": "tsx --env-file=.env scripts/indexDocument.ts",
     "start": "node --env-file=.env dist/index.js",
-    "run": "npx tsx index.ts"
+    "run": "npx tsx index.ts",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"./**/*.ts\"",
+    "format:check": "prettier --check \"./**/*.ts\""
   },
   "keywords": [],
   "author": "",
@@ -22,6 +25,12 @@
   },
   "devDependencies": {
     "@types/node": "^20.x.x",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^10.0.3",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "prettier": "^3.8.1",
     "tsx": "^4.x.x",
     "typescript": "^5.x.x"
   }
