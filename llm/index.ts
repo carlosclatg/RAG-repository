@@ -2,7 +2,6 @@ import axios from 'axios';
 
 const OLLAMA_URL = 'http://localhost:11434';
 const LLM_MODEL_RESPONSE = 'mistral:7b-instruct';
-const LLM_MODEL_SEARCH_DECISION = 'deepseek-r1:1.5b';
 export const SEMANTINC_MODE = 'semantico';
 export const HYBRID_MODE = 'hibrido';
 export type GeneratorResult =
@@ -19,6 +18,9 @@ export async function generateResponse(
 			prompt: `Usa el CONTEXTO para responder la PREGUNTA, no te inventes nada ni hagas suposiciones, responde
             con la información contenida en el CONTEXTO!.\n\nCONTEXTO:\n${finalContext}\n\nPREGUNTA: ${query}`,
 			stream: false,
+			options: {
+				temperature: 0,
+			},
 		});
 
 		return { success: true, data: response.data.response };
@@ -64,7 +66,7 @@ export async function selectRAGMode(prompt: string): Promise<string> {
 			prompt: routerPrompt(prompt),
 			stream: false,
 			options: {
-				temperature: 0,
+				temperature: 0, //Very deterministic
 			},
 		});
 		return await response.data.response;

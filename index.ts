@@ -2,8 +2,8 @@ import * as fs from 'fs';
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import axios from 'axios';
-import { indexDocument, generateEmbedding } from './rag/index.js';
-import { connectToVectorDB } from './db/index.js';
+import { generateEmbedding } from './embedding/index.js';
+import { connectToVectorDB, indexDocument } from './db/index.js';
 import { rankingResponses } from './rerank/index.js';
 import {
 	generateResponse,
@@ -20,7 +20,6 @@ interface SearchResult {
 	chapter: string;
 }
 
-const LLM_MODEL = 'mistral:7b-instruct';
 const COLLECTION_NAME = 'documents';
 const TEXTCHUNKWIDE = 2;
 
@@ -40,11 +39,7 @@ async function askQuestion(question: string): Promise<void> {
 			.toArray();
 	}
 	if (mode === HYBRID_MODE) {
-		results = await table
-			.search(queryEmbedding) // Busca por significado (Vector)
-			.where(`text LIKE '%${filter}%'`) // Filtra por palabra exacta (FTS)
-			.limit(3)
-			.toArray();
+		results = await table.search(filter).limit(20).toArray(); //Busca por FTS
 	}
 
 	if (results.length === 0) {
@@ -53,13 +48,18 @@ async function askQuestion(question: string): Promise<void> {
 	}
 
 	const contextChunks: Set<string> = new Set<string>();
-
+	const alreadyProcessedResult = new Set<number>(); //to avoid process the repeated results
 	for (const res of results) {
 		const idx: number = Number(res.id);
 		if (isNaN(idx)) {
 			contextChunks.add(res.text);
 			continue;
 		}
+		if (alreadyProcessedResult.has(idx)) {
+			continue;
+		}
+		alreadyProcessedResult.add(idx);
+		console.log(`[CONTEXTO: Información extraída del ${idx}]`);
 		const totalRows: number = await table.countRows();
 		const start: number = Math.max(0, idx - TEXTCHUNKWIDE);
 		const end: number = Math.min(totalRows, idx + TEXTCHUNKWIDE);
