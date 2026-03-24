@@ -13,6 +13,7 @@ interface VectorRow {
 	vector: number[];
 	text: string;
 	chapter: string;
+	[key: string]: unknown;
 }
 export async function connectToVectorDB(): Promise<lancedb.Connection> {
 	if (!instance) {

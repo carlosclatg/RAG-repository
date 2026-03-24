@@ -18,6 +18,8 @@
   "description": "RAG local con LanceDB y Ollama",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
+    "@langchain/core": "^1.1.35",
+    "@langchain/langgraph": "^1.2.5",
     "apache-arrow": "^17.0.0",
     "axios": "^1.13.5",
     "pdf-parse-fork": "^1.2.0",
