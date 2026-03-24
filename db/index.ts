@@ -1,11 +1,9 @@
 import * as lancedb from '@lancedb/lancedb';
-//import pdf from "pdf-parse-fork";
-import { chunkText, recursiveChunkingBySentences } from '../chunk/index.ts';
+import { recursiveChunkingBySentences } from '../chunk/index.js';
 import * as fs from 'fs';
-import axios, { AxiosResponse } from 'axios';
 import { Index } from '@lancedb/lancedb';
-import { generateEmbedding } from '../embedding/index.ts';
-const DB_PATH: string = './data';
+import { generateEmbedding } from '../embedding/index.js';
+import { DB_PATH } from '../config/index.js';
 
 let instance: lancedb.Connection; //singleton instance
 const COLLECTION_NAME: string = 'documents';
@@ -58,12 +56,12 @@ export async function indexDocument(path: string): Promise<void> {
 		for (const subChunk of subChunks) {
 			const embedding: number[] = await generateEmbedding(subChunk);
 
-			if (embedding?.length === 768) {
+			if (embedding?.length > 0) {
 				rows.push({
 					id: globalChunkIndex++,
 					vector: Array.from(embedding),
 					text: subChunk,
-					chapter: currentChapterTitle, //add title of chapter as metadata
+					chapter: currentChapterTitle,
 				});
 			}
 		}
@@ -76,14 +74,14 @@ export async function indexDocument(path: string): Promise<void> {
 		const table = await db.openTable(COLLECTION_NAME);
 		await table.add(rows);
 		await table.createIndex('text', {
-			config: Index.fts(), // Indice de Full Text Search con inverted index.
+			config: Index.fts(),
 			replace: true,
 		});
-		console.log(table.listIndices());
+		console.log(await table.listIndices());
 	} else {
 		const table = await db.createTable(COLLECTION_NAME, rows);
 		await table.createIndex('text', {
-			config: Index.fts(), // Indice de Full Text Search con inverted index.
+			config: Index.fts(),
 			replace: true,
 		});
 		console.log(await table.listIndices());

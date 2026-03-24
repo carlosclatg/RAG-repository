@@ -1,8 +1,7 @@
 import axios from 'axios';
+import { OLLAMA_URL, LLM_MODEL } from '../config/index.js';
 
-const OLLAMA_URL = 'http://localhost:11434';
-const LLM_MODEL_RESPONSE = 'mistral:7b-instruct';
-export const SEMANTINC_MODE = 'semantico';
+export const SEMANTIC_MODE = 'semantico';
 export const HYBRID_MODE = 'hibrido';
 export type GeneratorResult =
 	| { success: true; data: string }
@@ -13,65 +12,94 @@ export async function generateResponse(
 	finalContext: string,
 ): Promise<GeneratorResult> {
 	try {
-		const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
-			model: LLM_MODEL_RESPONSE,
-			prompt: `Usa el CONTEXTO para responder la PREGUNTA, no te inventes nada ni hagas suposiciones, responde
-            con la información contenida en el CONTEXTO!.\n\nCONTEXTO:\n${finalContext}\n\nPREGUNTA: ${query}`,
-			stream: false,
-			options: {
-				temperature: 0,
+		process.stdout.write('\nRespuesta: ');
+
+		const response = await axios.post(
+			`${OLLAMA_URL}/api/generate`,
+			{
+				model: LLM_MODEL,
+				prompt: `Usa el CONTEXTO para responder la PREGUNTA. No te inventes nada ni hagas suposiciones; responde únicamente con la información contenida en el CONTEXTO.\n\nCONTEXTO:\n${finalContext}\n\nPREGUNTA: ${query}`,
+				stream: true,
+				options: { temperature: 0 },
 			},
+			{ responseType: 'stream' },
+		);
+
+		return await new Promise((resolve) => {
+			let fullResponse = '';
+
+			response.data.on('data', (chunk: Buffer) => {
+				const lines = chunk.toString().split('\n').filter(Boolean);
+				for (const line of lines) {
+					try {
+						const parsed = JSON.parse(line);
+						if (parsed.response) {
+							process.stdout.write(parsed.response);
+							fullResponse += parsed.response;
+						}
+					} catch {
+						// partial chunk, ignore
+					}
+				}
+			});
+
+			response.data.on('end', () => {
+				process.stdout.write('\n');
+				resolve({ success: true, data: fullResponse });
+			});
+
+			response.data.on('error', (err: Error) => {
+				resolve({ success: false, error: err.message });
+			});
 		});
-
-		return { success: true, data: response.data.response };
-	} catch (error: any) {
-		// Diferenciamos tipos de errores
-		let message = 'Error desconocido';
-
-		if (error.code === 'ECONNREFUSED') {
-			message =
-				'No se pudo conectar con Ollama. ¿Está el servidor encendido?';
-		} else if (error.response) {
-			message = `Ollama respondió con error: ${error.response.status}`;
+	} catch (error: unknown) {
+		const axiosError = error as {
+			code?: string;
+			response?: { status: number };
+			message?: string;
+		};
+		let message = 'Unknown error';
+		if (axiosError.code === 'ECONNREFUSED') {
+			message = 'Could not connect to Ollama. Is the server running?';
+		} else if (axiosError.response) {
+			message = `Ollama responded with error: ${axiosError.response.status}`;
 		} else {
-			message = error.message;
+			message = axiosError.message ?? message;
 		}
-
 		console.error(`[LLM_ERROR]: ${message}`);
 		return { success: false, error: message };
 	}
 }
 
 export async function selectRAGMode(prompt: string): Promise<string> {
-	const routerPrompt = (prompt: string) => `
-        ESTRICTA RESPUESTA EN JSON.
-        Eres un experto en extracción de entidades. Tu tarea es decidir si la pregunta requiere una búsqueda SEMÁNTICA o HÍBRIDA.
+	const routerPrompt = (p: string) => `
+        STRICT JSON RESPONSE ONLY.
+        You are an entity extraction expert. Decide if the question requires SEMANTIC or HYBRID search.
         
-        REGLAS:
-        1. Si la pregunta menciona NOMBRES PROPIOS (Lyra, Kael, Silas, Aeridor), LUGARES o OBJETOS específicos, usa mode ${HYBRID_MODE}.
-        2. Si la pregunta es sobre conceptos, sentimientos o temas generales, usa mode ${SEMANTINC_MODE}.
-        3. En "filter", pon solo el nombre propio encontrado. Si no hay, pon null.
-        4. Omite cualquier otro texto, limítate a dar respuesta en formato JSON.
+        RULES:
+        1. If the question mentions PROPER NOUNS (names, places, specific objects), use mode ${HYBRID_MODE}.
+        2. If the question is about concepts, feelings, or general topics, use mode ${SEMANTIC_MODE}.
+        3. In "filter", put only the proper noun found. If none, put null.
+        4. Respond ONLY with the JSON object, no other text.
 
-        FORMATO DE SALIDA:
+        OUTPUT FORMAT:
         {"mode": "hibrido" | "semantico", "filter": string | null}
 
-        PREGUNTA: "${prompt}"
+        QUESTION: "${p}"
         JSON:
         `;
 
 	try {
 		const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
-			model: LLM_MODEL_RESPONSE,
+			model: LLM_MODEL,
 			prompt: routerPrompt(prompt),
 			stream: false,
-			options: {
-				temperature: 0, //Very deterministic
-			},
+			options: { temperature: 0 },
 		});
-		return await response.data.response;
-	} catch (error: any) {
-		console.error('Error en Ollama:', error.message);
-		return Promise.reject(error);
+		return response.data.response;
+	} catch (error: unknown) {
+		const err = error as { message?: string };
+		console.error('[LLM_ERROR] selectRAGMode:', err.message);
+		throw error;
 	}
 }

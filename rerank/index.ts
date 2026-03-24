@@ -1,40 +1,47 @@
 // Rerank API (v2) (POST /v2/rerank)
-const THRESHOLD = 0.8;
+import { COHERE_API_KEY, RERANK_THRESHOLD } from '../config/index.js';
+
 export async function rankingResponses(
 	query: string,
 	possibleResponses: string[],
 	top_n: number = 2,
 ): Promise<string[]> {
-	const bodyBuild = JSON.stringify({
-		model: 'rerank-v4.0-pro',
-		query: query,
-		documents: possibleResponses,
-		top_n: 3,
-	});
-	const apiKey = process.env.COHERE_API_KEY;
-	if (!apiKey) {
-		return Promise.resolve(possibleResponses);
+	if (!COHERE_API_KEY) {
+		return possibleResponses;
 	}
+
+	const body = JSON.stringify({
+		model: 'rerank-v4.0-pro',
+		query,
+		documents: possibleResponses,
+		top_n,
+	});
+
 	const response = await fetch('https://api.cohere.com/v2/rerank', {
 		method: 'POST',
 		headers: {
-			Authorization: apiKey,
+			Authorization: `Bearer ${COHERE_API_KEY}`,
 			'Content-Type': 'application/json',
 		},
-		body: bodyBuild,
+		body,
 	});
-	const body = await response.json();
 
-	if (response.status != 200) {
-		return Promise.reject(body);
+	const responseBody = await response.json();
+
+	if (response.status !== 200) {
+		return Promise.reject(
+			new Error(
+				`Cohere rerank failed [${response.status}]: ${JSON.stringify(responseBody)}`,
+			),
+		);
 	}
 
-	const bestIndexs = body.results
-		.filter((result: any) => result.relevance_score > THRESHOLD)
-		.map((result: any) => result.index);
-	const bestResponses = possibleResponses.filter((response, index) =>
-		bestIndexs.includes(index),
-	);
+	const bestIndexes: number[] = responseBody.results
+		.filter(
+			(result: { relevance_score: number }) =>
+				result.relevance_score > RERANK_THRESHOLD,
+		)
+		.map((result: { index: number }) => result.index);
 
-	return Promise.resolve(bestResponses);
+	return possibleResponses.filter((_, index) => bestIndexes.includes(index));
 }

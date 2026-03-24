@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import axios from 'axios';
 import { generateEmbedding } from './embedding/index.js';
 import { connectToVectorDB, indexDocument } from './db/index.js';
 import { rankingResponses } from './rerank/index.js';
@@ -10,9 +9,10 @@ import {
 	GeneratorResult,
 	HYBRID_MODE,
 	selectRAGMode,
-	SEMANTINC_MODE,
+	SEMANTIC_MODE,
 } from './llm/index.js';
 import { Table } from '@lancedb/lancedb';
+import { DOCUMENT_PATH, QUERY_LIMIT, TEXT_CHUNK_WIDE } from './config/index.js';
 
 interface SearchResult {
 	id: number;
@@ -22,208 +22,259 @@ interface SearchResult {
 }
 
 const COLLECTION_NAME = 'documents';
-const TEXTCHUNKWIDE = 2;
-let usedChapters: string[] = [];
-const QUERY_LIMIT = 20;
-//MEJORA:
-//1. Obtener resultados de busqueda
-//2. Obtener los n mejores capítulos
-//3. Pasarlos al ranker, sino tienen buena coincidencia, pasar a los siguientes capítulos.
-//4. Si la respuesta es buena, en ese caso pasarlo al LLM para la respuesta definitiva.
-//5. Si no hubiera una respuesta adecuada, en tal caso, se debería responder por parte del LLM, que no hay ninguna respuesta adecuada.
+const MAX_CHAPTERS_TO_TRY = 10;
+
 async function askQuestion(question: string): Promise<void> {
+	// usedChapters is scoped per question so state never leaks between queries
+	const usedChapters: string[] = [];
+
 	const db = await connectToVectorDB();
 	const table = await db.openTable(COLLECTION_NAME);
 	const queryEmbedding: number[] = await generateEmbedding(question);
-	const semantincModeEnabled = false;
 	const modeSelection = await selectRAGMode(question);
 	const { mode, filter } = JSON.parse(modeSelection);
 	let reRankedContextChunks: string[] = [];
 	let results: SearchResult[] = [];
-		if (semantincModeEnabled || mode === SEMANTINC_MODE) {
-			results = await table
-				.search(queryEmbedding) // Busca por significado (Vector)
-				.limit(QUERY_LIMIT)
-				.toArray();
-			//Estrategia de mirar el contexto del vector, es decir  vector anterior y posterior.
-			reRankedContextChunks = await semanticModeSearch(reRankedContextChunks, results, table, question);
-		}
-		if (mode === HYBRID_MODE) {
-			results = await table
-				.search(filter)
-				.limit(QUERY_LIMIT)
-				.toArray(); //Busca por FTS
-			//Estrategia de mirar el contexto del capítulo entero dado un vector con un capítulo.
-			reRankedContextChunks = await hybridModeSearch(reRankedContextChunks, results, table, question);
-		}
-	
-	const finalContext: string = Array.from(reRankedContextChunks).join(
-		'\n---\n',
-	);
+
+	if (mode === SEMANTIC_MODE) {
+		results = (await table
+			.search(queryEmbedding)
+			.limit(QUERY_LIMIT)
+			.toArray()) as SearchResult[];
+		reRankedContextChunks = await semanticModeSearch(
+			results,
+			table,
+			question,
+		);
+	}
+
+	if (mode === HYBRID_MODE) {
+		results = (await table
+			.search(filter)
+			.limit(QUERY_LIMIT)
+			.toArray()) as SearchResult[];
+		reRankedContextChunks = await hybridModeSearch(
+			results,
+			table,
+			question,
+			usedChapters,
+		);
+	}
+
+	if (reRankedContextChunks.length === 0) {
+		console.log('\nNo relevant information found for your question.');
+		return;
+	}
+
+	const finalContext: string = reRankedContextChunks.join('\n---\n');
 	const result: GeneratorResult = await generateResponse(
 		question,
 		finalContext,
 	);
 
-	if (result.success) {
-		console.log('Respuesta:', result.data);
-	} else {
-		// Aquí decides qué mostrar al usuario final
-		console.error('Hubo un problema:', result.error);
+	if (!result.success) {
+		console.error('\nError:', result.error);
 	}
 }
 
+async function hybridModeSearch(
+	results: SearchResult[],
+	table: Table,
+	question: string,
+	usedChapters: string[],
+): Promise<string[]> {
+	let reRankedContextChunks: string[] = [];
 
-async function hybridModeSearch(reRankedContextChunks: string[], results: SearchResult[], table: Table, question: string) {
-	while (reRankedContextChunks.length === 0 && usedChapters.length < 10) {
+	while (
+		reRankedContextChunks.length === 0 &&
+		usedChapters.length < MAX_CHAPTERS_TO_TRY
+	) {
 		if (results.length === 0) break;
 
-		let currentChapterToProcess: string | null = null;
+		const currentChapterToProcess =
+			results.find(
+				(res) => res.chapter && !usedChapters.includes(res.chapter),
+			)?.chapter ?? null;
 
-		// 1. Buscamos el primer resultado cuyo capítulo NO hayamos utilizado
-		for (const res of results) {
-			if (res.chapter && !usedChapters.includes(res.chapter)) {
-				currentChapterToProcess = res.chapter;
-				break;
-			}
-		}
-
-		// Si no quedan capítulos nuevos en la lista de resultados, salimos del while
 		if (!currentChapterToProcess) {
-			console.log('No quedan más capítulos nuevos por procesar en los resultados actuales.');
+			console.log('No more new chapters to process in current results.');
 			break;
 		}
 
-		// 2. Marcamos como usado y obtenemos el contenido
 		usedChapters.push(currentChapterToProcess);
-		const chapterText = await getSingleChapterContent(table, currentChapterToProcess);
+		const chapterText = await getSingleChapterContent(
+			table,
+			currentChapterToProcess,
+		);
 
 		if (chapterText.trim().length > 0) {
-			const contextPayload = [`[CAPÍTULO: ${currentChapterToProcess}]\n${chapterText}`];
+			const contextPayload = [
+				`[CHAPTER: ${currentChapterToProcess}]\n${chapterText}`,
+			];
+			console.log(`Trying chapter: ${currentChapterToProcess}...`);
+			reRankedContextChunks = await rankingResponses(
+				question,
+				contextPayload,
+			);
 
-			// 3. Pasamos al reranker inmediatamente
-			console.log(`Probando suerte con el capítulo: ${currentChapterToProcess}...`);
-			reRankedContextChunks = await rankingResponses(question, contextPayload);
-
-			// Si el reranker devuelve algo, el 'while' terminará automáticamente 
-			// porque reRankedContextChunks.length ya no será 0.
 			if (reRankedContextChunks.length === 0) {
-				console.log(`El capítulo ${currentChapterToProcess} no aportó info útil. Buscando el siguiente...`);
+				console.log(
+					`Chapter "${currentChapterToProcess}" had no relevant info. Trying next...`,
+				);
 			}
 		}
 	}
+
 	return reRankedContextChunks;
 }
 
-async function semanticModeSearch(reRankedContextChunks: string[], results: SearchResult[], table: Table, question: string) {
-	while (reRankedContextChunks.length === 0) {
-		if (results.length === 0) {
-			console.log('No relevant information found.');
-			break;
-		}
-		const contextChunks: Set<string> = await getContextFromNeighbors(table, results, TEXTCHUNKWIDE);
-		reRankedContextChunks = await rankingResponses(
-			question,
-			Array.from(contextChunks)
-		);
-		if (reRankedContextChunks.length === 0) {
-			console.log('No relevant information found.');
-		}
+async function semanticModeSearch(
+	results: SearchResult[],
+	table: Table,
+	question: string,
+): Promise<string[]> {
+	if (results.length === 0) {
+		return [];
 	}
-	return reRankedContextChunks;
+	const contextChunks = await getContextFromNeighbors(
+		table,
+		results,
+		TEXT_CHUNK_WIDE,
+	);
+	return rankingResponses(question, Array.from(contextChunks));
 }
 
 async function main(): Promise<void> {
-	try {
-		const archivoALeer = '/home/msi/Desktop/AI/RAG/rag-local/texto.txt';
-		if (!fs.existsSync(archivoALeer)) {
-			console.error(`El archivo ${archivoALeer} no existe.`);
-			return;
-		}
+	const documentPath = DOCUMENT_PATH;
 
-		console.log('⏳ Indexando documento...');
-		await indexDocument(archivoALeer);
+	if (!fs.existsSync(documentPath)) {
+		console.error(`Document not found: ${documentPath}`);
+		console.error(
+			'Set the DOCUMENT_PATH environment variable to the correct path.',
+		);
+		process.exit(1);
+	}
 
-		const rl = readline.createInterface({ input, output });
-		console.log("\nSistema listo. Escribe 'salir' para terminar.");
+	const db = await connectToVectorDB();
+	const tableNames = await db.tableNames();
+	const tableExists = tableNames.includes(COLLECTION_NAME);
+	let tableHasRows = false;
 
-		while (true) {
-			const pregunta = await rl.question('\nHaz tu pregunta: ');
-			if (['salir', 'exit', 'quit'].includes(pregunta.toLowerCase()))
-				break;
-			if (!pregunta.trim()) continue;
+	if (tableExists) {
+		const table = await db.openTable(COLLECTION_NAME);
+		tableHasRows = (await table.countRows()) > 0;
+	}
 
-			await askQuestion(pregunta);
-		}
+	if (!tableHasRows) {
+		console.log('⏳ Indexing document...');
+		await indexDocument(documentPath);
+		console.log('✅ Document indexed.');
+	} else {
+		console.log('✅ Index already exists, skipping re-indexing.');
+	}
+
+	const rl = readline.createInterface({ input, output });
+
+	const shutdown = () => {
+		console.log('\nGoodbye!');
 		rl.close();
-	} catch (error) {
-		console.error('Error crítico:', error);
+		process.exit(0);
+	};
+	process.on('SIGINT', shutdown);
+	process.on('SIGTERM', shutdown);
+
+	console.log("\nSystem ready. Type 'exit' to quit.");
+
+	try {
+		while (true) {
+			const question = await rl.question('\nYour question: ');
+			if (['salir', 'exit', 'quit'].includes(question.toLowerCase()))
+				break;
+			if (!question.trim()) continue;
+
+			try {
+				await askQuestion(question);
+			} catch (error) {
+				console.error('Error processing question:', error);
+			}
+		}
+	} finally {
+		rl.close();
 	}
 }
 
-main();
-
-async function getSingleChapterContent(table: any, chapterName: string): Promise<string> {
-    const chapterChunks = await table
-        .query()
-        .where(`chapter = '${chapterName}'`)
-        .toArray();
-
-    // Ordenar por ID numérico y unir texto
-    return chapterChunks
-        .sort((a: any, b: any) => Number(a.id) - Number(b.id))
-        .map((c: any) => c.text)
-        .join(' ');
-}
-
+main().catch((error) => {
+	console.error('Fatal error:', error);
+	process.exit(1);
+});
 
 /**
- * 
- * @param table 
- * @param results 
- * @param textChunkWide 
- * @returns returns the context chunks around the results [vector - textChunkWide, ..., vector + textChunkWide]
+ * Fetches all chunks belonging to a chapter, sorted by id, and joins them.
+ * Uses parameterized-style escaping to prevent injection via chapter names.
+ */
+async function getSingleChapterContent(
+	table: Table,
+	chapterName: string,
+): Promise<string> {
+	// Escape single quotes to prevent injection through chapter names
+	const safeChapterName = chapterName.replace(/'/g, "''");
+	const chapterChunks = (await table
+		.query()
+		.where(`chapter = '${safeChapterName}'`)
+		.toArray()) as SearchResult[];
+
+	return chapterChunks
+		.sort((a, b) => Number(a.id) - Number(b.id))
+		.map((c) => c.text)
+		.join(' ');
+}
+
+/**
+ * Returns context chunks around each search result, expanding by textChunkWide
+ * neighbours on each side within the same chapter.
  */
 async function getContextFromNeighbors(
-    table: any, 
-    results: SearchResult[], 
-    textChunkWide: number
+	table: Table,
+	results: SearchResult[],
+	textChunkWide: number,
 ): Promise<Set<string>> {
-    const contextChunks: Set<string> = new Set<string>();
-    const alreadyProcessedResult = new Set<number>();
+	const contextChunks = new Set<string>();
+	const alreadyProcessed = new Set<number>();
+	const totalRows: number = await table.countRows();
 
-    for (const res of results) {
-        const idx: number = Number(res.id);
-        
-        // Validaciones básicas
-        if (isNaN(idx)) {
-            contextChunks.add(res.text);
-            continue;
-        }
-        if (alreadyProcessedResult.has(idx)) continue;
+	for (const res of results) {
+		const idx = Number(res.id);
 
-        alreadyProcessedResult.add(idx);
-        
-        // Lógica de vecindad
-        const totalRows: number = await table.countRows();
-        const start: number = Math.max(0, idx - textChunkWide);
-        const end: number = Math.min(totalRows, idx + textChunkWide);
+		if (isNaN(idx)) {
+			contextChunks.add(res.text);
+			continue;
+		}
+		if (alreadyProcessed.has(idx)) continue;
+		alreadyProcessed.add(idx);
 
-        const neighbors: SearchResult[] = await table
-            .query()
-            .where(`id >= ${start} AND id <= ${end} AND chapter = '${res.chapter}'`)
-            .toArray();
+		const start = Math.max(0, idx - textChunkWide);
+		const end = Math.min(totalRows - 1, idx + textChunkWide);
+		const safeChapter = res.chapter.replace(/'/g, "''");
 
-        neighbors.sort((a, b) => a.id - b.id);
-        
-        const enrichedText = `[CONTEXTO: Capítulo ${res.chapter}] Contenido:\n` + 
-                             neighbors.map((n) => n.text).join(' ');
+		const neighbors = (await table
+			.query()
+			.where(
+				`id >= ${start} AND id <= ${end} AND chapter = '${safeChapter}'`,
+			)
+			.toArray()) as SearchResult[];
 
-        if (enrichedText.trim().length > 0) {
-            contextChunks.add(enrichedText);
-        }
-    }
-    return contextChunks;
+		neighbors.sort((a, b) => a.id - b.id);
+
+		const enrichedText =
+			`[CONTEXT: Chapter ${res.chapter}]\n` +
+			neighbors.map((n) => n.text).join(' ');
+
+		if (enrichedText.trim().length > 0) {
+			contextChunks.add(enrichedText);
+		}
+	}
+
+	return contextChunks;
 }
 //Mejoras:
 //Ajusta modelo, temperatura y ks
