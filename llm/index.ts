@@ -12,63 +12,51 @@ export async function generateResponse(
 	finalContext: string,
 ): Promise<GeneratorResult> {
 	try {
-		process.stdout.write('\nRespuesta: ');
-
-		const response = await axios.post(
-			`${OLLAMA_URL}/api/generate`,
-			{
-				model: LLM_MODEL,
-				prompt: `Usa el CONTEXTO para responder la PREGUNTA. No te inventes nada ni hagas suposiciones; responde únicamente con la información contenida en el CONTEXTO.\n\nCONTEXTO:\n${finalContext}\n\nPREGUNTA: ${query}`,
-				stream: true,
-				options: { temperature: 0 },
+		const prompt = `
+				Instrucciones: Eres un asistente experto. Responde EXCLUSIVAMENTE usando el CONTEXTO proporcionado. Si la respuesta no está en el contexto, di que no lo sabes.
+				CONTEXTO:
+				${finalContext}
+				PREGUNTA:
+				${query}
+				`;
+		const cleanPrompt = preparePromptForOllama(prompt);
+		const response = await axios.post(`${OLLAMA_URL}/api/generate`, {
+			model: LLM_MODEL,
+			prompt: cleanPrompt,
+			stream: false,
+			options: {
+				temperature: 0,
+				num_ctx: 32768,
+				repeat_penalty: 1.1,
+				stop: ['###', 'Instrucciones:'],
 			},
-			{ responseType: 'stream' },
-		);
-
-		return await new Promise((resolve) => {
-			let fullResponse = '';
-
-			response.data.on('data', (chunk: Buffer) => {
-				const lines = chunk.toString().split('\n').filter(Boolean);
-				for (const line of lines) {
-					try {
-						const parsed = JSON.parse(line);
-						if (parsed.response) {
-							process.stdout.write(parsed.response);
-							fullResponse += parsed.response;
-						}
-					} catch {
-						// partial chunk, ignore
-					}
-				}
-			});
-
-			response.data.on('end', () => {
-				process.stdout.write('\n');
-				resolve({ success: true, data: fullResponse });
-			});
-
-			response.data.on('error', (err: Error) => {
-				resolve({ success: false, error: err.message });
-			});
 		});
+
+		return { success: true, data: response.data.response };
 	} catch (error: unknown) {
-		const axiosError = error as {
-			code?: string;
-			response?: { status: number };
-			message?: string;
-		};
-		let message = 'Unknown error';
-		if (axiosError.code === 'ECONNREFUSED') {
-			message = 'Could not connect to Ollama. Is the server running?';
-		} else if (axiosError.response) {
-			message = `Ollama responded with error: ${axiosError.response.status}`;
+		// Diferenciamos tipos de errores
+		let message = 'Error desconocido';
+
+		if (error instanceof Error && error.code === 'ECONNREFUSED') {
+			message =
+				'No se pudo conectar con Ollama. ¿Está el servidor encendido?';
+		} else if (error.response) {
+			message = `Ollama respondió con error: ${error.response.status}`;
 		} else {
-			message = axiosError.message ?? message;
+			message = error.message;
 		}
+
 		console.error(`[LLM_ERROR]: ${message}`);
 		return { success: false, error: message };
 	}
+}
+
+function preparePromptForOllama(text: string): string {
+	return text
+		.replace(/\r?\n|\r/g, ' ') // Cambia cualquier tipo de salto de línea por un espacio
+		.replace(/\t/g, ' ') // Cambia tabuladores por espacios
+		.replace(/\s+/g, ' ') // Si hay 2 o más espacios juntos, los deja en 1 solo
+		.trim(); // Quita espacios al principio y al final
 }
 
 export async function selectRAGMode(prompt: string): Promise<string> {

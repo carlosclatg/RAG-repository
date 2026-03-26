@@ -8,9 +8,11 @@ export const EMBEDDING_MODEL: string =
 
 export const DB_PATH: string = process.env.DB_PATH ?? './data';
 
-export const COHERE_API_KEY: string | undefined = process.env.COHERE_API_KEY;
+export const COHERE_API_KEY: string | undefined =
+	'slGTl37o7lYutxVf7EkWlQqNLYfjgndz2C1lyfJh';
 
-export const DOCUMENT_PATH: string = process.env.DOCUMENT_PATH ?? './texto.txt';
+export const DOCUMENT_PATH: string =
+	process.env.DOCUMENT_PATH ?? '/home/msi/Desktop/AI/RAG/rag-local/texto.txt';
 
 export const RERANK_THRESHOLD: number = Number(
 	process.env.RERANK_THRESHOLD ?? 0.8,

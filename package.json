@@ -8,6 +8,7 @@
     "indexar": "tsx --env-file=.env scripts/indexDocument.ts",
     "start": "node --env-file=.env dist/index.js",
     "run": "npx tsx index.ts",
+    "run-agent": "npx tsx ./agentic_implementation/index.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"./**/*.ts\"",
     "format:check": "prettier --check \"./**/*.ts\""
@@ -20,10 +21,12 @@
     "@lancedb/lancedb": "^0.26.2",
     "@langchain/core": "^1.1.35",
     "@langchain/langgraph": "^1.2.5",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.1",
     "apache-arrow": "^17.0.0",
     "axios": "^1.13.5",
     "pdf-parse-fork": "^1.2.0",
-    "pdfreader": "^3.0.8"
+    "pdfreader": "^3.0.8",
+    "sqlite3": "^6.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.x.x",

@@ -3,7 +3,7 @@ import { recursiveChunkingBySentences } from '../chunk/index.js';
 import * as fs from 'fs';
 import { Index } from '@lancedb/lancedb';
 import { generateEmbedding } from '../embedding/index.js';
-import { DB_PATH } from '../config/index.js';
+import { DB_PATH, DOCUMENT_PATH } from '../config/index.js';
 
 let instance: lancedb.Connection; //singleton instance
 const COLLECTION_NAME: string = 'documents';
@@ -88,4 +88,33 @@ export async function indexDocument(path: string): Promise<void> {
 		console.log(await table.listIndices());
 	}
 	console.log('Documento indexado.');
+}
+
+export async function initDBAndChunking() {
+	let documentPath = DOCUMENT_PATH;
+	if (!fs.existsSync(documentPath)) {
+		console.error(`Document not found: ${documentPath}`);
+		console.error(
+			'Set the DOCUMENT_PATH environment variable to the correct path.',
+		);
+		process.exit(1);
+	}
+
+	const db = await connectToVectorDB();
+	const tableNames = await db.tableNames();
+	const tableExists = tableNames.includes(COLLECTION_NAME);
+	let tableHasRows = false;
+
+	if (tableExists) {
+		const table = await db.openTable(COLLECTION_NAME);
+		tableHasRows = (await table.countRows()) > 0;
+	}
+
+	if (!tableHasRows) {
+		console.log('⏳ Indexing document...');
+		await indexDocument(documentPath);
+		console.log('✅ Document indexed.');
+	} else {
+		console.log('✅ Index already exists, skipping re-indexing.');
+	}
 }

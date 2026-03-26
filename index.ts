@@ -1,9 +1,8 @@
-import * as fs from 'fs';
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { generateEmbedding } from './embedding/index.js';
-import { connectToVectorDB, indexDocument } from './db/index.js';
-import { rankingResponses } from './rerank/index.js';
+import { connectToVectorDB, initDBAndChunking } from './db/index.js';
+import { rankingResponses } from './rerank_service/index.js';
 import {
 	generateResponse,
 	GeneratorResult,
@@ -12,7 +11,7 @@ import {
 	SEMANTIC_MODE,
 } from './llm/index.js';
 import { Table } from '@lancedb/lancedb';
-import { DOCUMENT_PATH, QUERY_LIMIT, TEXT_CHUNK_WIDE } from './config/index.js';
+import { QUERY_LIMIT, TEXT_CHUNK_WIDE } from './config/index.js';
 
 interface SearchResult {
 	id: number;
@@ -75,6 +74,8 @@ async function askQuestion(question: string): Promise<void> {
 	if (!result.success) {
 		console.error('\nError:', result.error);
 	}
+
+	console.log('\nAnswer:', result);
 }
 
 async function hybridModeSearch(
@@ -89,8 +90,6 @@ async function hybridModeSearch(
 		reRankedContextChunks.length === 0 &&
 		usedChapters.length < MAX_CHAPTERS_TO_TRY
 	) {
-		if (results.length === 0) break;
-
 		const currentChapterToProcess =
 			results.find(
 				(res) => res.chapter && !usedChapters.includes(res.chapter),
@@ -145,33 +144,7 @@ async function semanticModeSearch(
 }
 
 async function main(): Promise<void> {
-	const documentPath = DOCUMENT_PATH;
-
-	if (!fs.existsSync(documentPath)) {
-		console.error(`Document not found: ${documentPath}`);
-		console.error(
-			'Set the DOCUMENT_PATH environment variable to the correct path.',
-		);
-		process.exit(1);
-	}
-
-	const db = await connectToVectorDB();
-	const tableNames = await db.tableNames();
-	const tableExists = tableNames.includes(COLLECTION_NAME);
-	let tableHasRows = false;
-
-	if (tableExists) {
-		const table = await db.openTable(COLLECTION_NAME);
-		tableHasRows = (await table.countRows()) > 0;
-	}
-
-	if (!tableHasRows) {
-		console.log('⏳ Indexing document...');
-		await indexDocument(documentPath);
-		console.log('✅ Document indexed.');
-	} else {
-		console.log('✅ Index already exists, skipping re-indexing.');
-	}
+	await initDBAndChunking();
 
 	const rl = readline.createInterface({ input, output });
 
