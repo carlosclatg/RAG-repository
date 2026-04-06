@@ -9,7 +9,7 @@ export const EMBEDDING_MODEL: string =
 export const DB_PATH: string = process.env.DB_PATH ?? './data';
 
 export const COHERE_API_KEY: string | undefined =
-	'slGTl37o7lYutxVf7EkWlQqNLYfjgndz2C1lyfJh';
+	'';
 
 export const DOCUMENT_PATH: string =
 	process.env.DOCUMENT_PATH ?? '/home/msi/Desktop/AI/RAG/rag-local/texto.txt';
