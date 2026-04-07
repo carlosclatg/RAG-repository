@@ -37,6 +37,7 @@ import { rankingResponses } from '../rerank_service/index.ts';
 import { QUERY_LIMIT } from '../config/index.js';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { randomUUID } from 'crypto';
+import { logInfo, logWarn, logError, shutdownLogger } from '../observability/index.ts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. STATE DEFINITION
@@ -79,11 +80,11 @@ const COLLECTION_NAME = 'documents';
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function routeQuestion(state: State) {
-	console.log('\n[routeQuestion] Decidiendo estrategia inicial...');
+	logInfo('[routeQuestion] Decidiendo estrategia inicial...');
 	try {
 		const raw = await selectRAGMode(state.question);
 		const { mode, filter } = JSON.parse(raw);
-		console.log(`[routeQuestion] → modo sugerido: ${mode}`);
+		logInfo(`[routeQuestion] → modo sugerido: ${mode}`, { mode });
 		return { mode, filter };
 	} catch {
 		return { mode: 'semantico', filter: null };
@@ -91,7 +92,7 @@ async function routeQuestion(state: State) {
 }
 
 async function semanticSearch(state: State) {
-	console.log('\n[semanticSearch] Ejecutando búsqueda vectorial...');
+	logInfo('[semanticSearch] Ejecutando búsqueda vectorial...');
 	const db = await connectToVectorDB();
 	const table = await db.openTable(COLLECTION_NAME);
 	const embedding = await generateEmbedding(state.question);
@@ -101,7 +102,7 @@ async function semanticSearch(state: State) {
 		.limit(QUERY_LIMIT)
 		.toArray()) as DocumentChunk[];
 
-	console.log(`[semanticSearch] Encontrados ${results.length} chunks.`);
+	logInfo(`[semanticSearch] Encontrados ${results.length} chunks.`, { count: results.length });
 	return {
 		documents: results,
 		triedModes: ['semantico'],
@@ -109,14 +110,12 @@ async function semanticSearch(state: State) {
 }
 
 async function hybridSearch(state: State) {
-	console.log('\n[hybridSearch] Ejecutando búsqueda FTS (Híbrida)...');
+	logInfo('[hybridSearch] Ejecutando búsqueda FTS (Híbrida)...');
 	const db = await connectToVectorDB();
 	const table = await db.openTable(COLLECTION_NAME);
 
 	if (!state.filter) {
-		console.warn(
-			'[hybridSearch] Sin filtro FTS, redirigiendo a semántico.',
-		);
+		logWarn('[hybridSearch] Sin filtro FTS, redirigiendo a semántico.');
 		return semanticSearch(state);
 	}
 
@@ -125,7 +124,7 @@ async function hybridSearch(state: State) {
 		.limit(QUERY_LIMIT)
 		.toArray()) as DocumentChunk[];
 
-	console.log(`[hybridSearch] Encontrados ${results.length} chunks.`);
+	logInfo(`[hybridSearch] Encontrados ${results.length} chunks.`, { count: results.length });
 	return {
 		documents: results,
 		triedModes: [HYBRID_MODE],
@@ -133,7 +132,7 @@ async function hybridSearch(state: State) {
 }
 
 async function gradeDocuments(state: State) {
-	console.log('\n[gradeDocuments] Re-rankeando y evaluando relevancia...');
+	logInfo('[gradeDocuments] Re-rankeando y evaluando relevancia...');
 	if (state.documents.length === 0) return { relevantChunks: [] };
 
 	const rawTexts = state.documents.map(
@@ -141,14 +140,12 @@ async function gradeDocuments(state: State) {
 	);
 
 	const relevantChunks = await rankingResponses(state.question, rawTexts);
-	console.log(
-		`[gradeDocuments] ${relevantChunks.length} chunks pasaron el filtro.`,
-	);
+	logInfo(`[gradeDocuments] ${relevantChunks.length} chunks pasaron el filtro.`, { count: relevantChunks.length });
 	return { relevantChunks };
 }
 
 async function generateAnswer(state: State) {
-	console.log('\n[generateAnswer] Generando respuesta final...');
+	logInfo('[generateAnswer] Generando respuesta final...');
 	const context = state.relevantChunks.join('\n---\n');
 	const result = await generateResponse(state.question, context);
 
@@ -156,7 +153,7 @@ async function generateAnswer(state: State) {
 }
 
 function noAnswer(state: State) {
-	console.log('\n[noAnswer] Agotadas todas las vías de búsqueda.');
+	logWarn('[noAnswer] Agotadas todas las vías de búsqueda.', { question: state.question });
 	return {
 		answer: `Lo siento, tras buscar por varios métodos, no encontré información relevante para: "${state.question}"`,
 	};
@@ -186,9 +183,7 @@ function decideAfterGrading(state: State): string {
 		state.triedModes.includes(HYBRID_MODE) &&
 		!state.triedModes.includes('semantico')
 	) {
-		console.log(
-			'🔄 RE-INTENTO: El modo híbrido falló. Probando búsqueda semántica...',
-		);
+		logInfo('RE-INTENTO: El modo híbrido falló. Probando búsqueda semántica...');
 		return 'semanticSearch';
 	}
 
@@ -198,9 +193,7 @@ function decideAfterGrading(state: State): string {
 		!state.triedModes.includes(HYBRID_MODE) &&
 		state.filter
 	) {
-		console.log(
-			'🔄 RE-INTENTO: El modo semántico falló. Probando búsqueda híbrida...',
-		);
+		logInfo('RE-INTENTO: El modo semántico falló. Probando búsqueda híbrida...');
 		return 'hybridSearch';
 	}
 
@@ -263,7 +256,7 @@ export async function runAgent(question: string): Promise<void> {
 		triedModes: [],
 	};
 
-	console.log('\n--- 🌊 INICIANDO PASO A PASO (STREAMING) ---');
+	logInfo('INICIANDO PASO A PASO (STREAMING)', { thread_id });
 
 	// 2. EL PASO A PASO: Usamos .stream() para ver qué nodo se ejecuta en tiempo real
 	const stream = await graph.stream(initialState, config);
@@ -272,54 +265,46 @@ export async function runAgent(question: string): Promise<void> {
 		const nodeName = Object.keys(event)[0];
 		const stateAtThisPoint = event[nodeName];
 
-		console.log(`\n📍 [NODO: ${nodeName.toUpperCase()}]`);
-		console.log(`   ├─ 🔍 Modo actual: ${stateAtThisPoint.mode || 'N/A'}`);
-		console.log(
-			`   ├─ 📚 Documentos en memoria: ${stateAtThisPoint.documents?.length || 0}`,
-		);
-		console.log(
-			`   ├─ 🧩 Chunks relevantes: ${stateAtThisPoint.relevantChunks?.length || 0}`,
-		);
-		console.log(
-			`   ├─ 🔄 Historial de intentos: [${stateAtThisPoint.triedModes?.join(' -> ') || ''}]`,
-		);
-
-		if (stateAtThisPoint.answer) {
-			console.log(`   └─ ✅ Respuesta generada (parcial)`);
-		}
-		console.log(`   -------------------------------------------`);
+		logInfo(`[NODO: ${nodeName.toUpperCase()}]`, {
+			node: nodeName,
+			mode: stateAtThisPoint.mode || 'N/A',
+			documents: stateAtThisPoint.documents?.length || 0,
+			relevantChunks: stateAtThisPoint.relevantChunks?.length || 0,
+			triedModes: stateAtThisPoint.triedModes?.join(' -> ') || '',
+			hasAnswer: !!stateAtThisPoint.answer,
+		});
 	}
 
 	// 3. EL HISTÓRICO: Una vez termina, consultamos la base de datos SQLite
-	console.log('\n--- 📜 REBOBINANDO HISTÓRICO (Desde SQLite) ---');
+	logInfo('REBOBINANDO HISTÓRICO (Desde SQLite)');
 
 	// getStateHistory devuelve un iterador con todos los estados guardados en el DB
 	for await (const state of graph.getStateHistory(config)) {
 		const metadata = state.metadata; // Información de quién creó el estado
 		const values = state.values; // Los datos reales (AgentState)
 
-		console.log(`\nRevisando punto de control:`);
-		console.log(`- Nodo origen: ${metadata?.source || 'Inicio'}`);
-		console.log(`- Pregunta: ${values.question}`);
-		console.log(`- Respuesta actual: ${values.answer || '(vacía)'}`);
-		console.log(
-			`- Modos intentados: ${values.triedModes?.join(', ') || 'ninguno'}`,
-		);
-		console.log('------------------------------------------');
+		logInfo('Checkpoint de estado', {
+			source: metadata?.source || 'Inicio',
+			question: values.question,
+			answer: values.answer || '(vacía)',
+			triedModes: values.triedModes?.join(', ') || 'ninguno',
+		});
 	}
 }
 
 async function main() {
 	const pregunta =
 		'¿El laboratorio de la Especialista en Flujos Etéreos estaba diseñado con paredes de vidrio plúmbeo?';
-	console.log('🚀 Iniciando Agente RAG con Lógica de Reintento...');
+	logInfo('Iniciando Agente RAG con Lógica de Reintento...');
 
 	try {
 		initDBAndChunking();
 		await runAgent(pregunta);
-		console.log('\n--- 🎯 RESPUESTA FINAL ---');
+		logInfo('RESPUESTA FINAL generada');
 	} catch (error) {
-		console.error('❌ Error:', error);
+		logError(`Error en agente RAG: ${error instanceof Error ? error.message : String(error)}`);
+	} finally {
+		await shutdownLogger();
 	}
 }
 

@@ -1,0 +1,95 @@
+{
+    "title": "RAG Local - Logs",
+    "uid": "rag-local-logs",
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+        {
+            "id": 1,
+            "type": "logs",
+            "title": "All Logs",
+            "gridPos": {
+                "h": 12,
+                "w": 24,
+                "x": 0,
+                "y": 0
+            },
+            "datasource": {
+                "type": "loki",
+                "uid": "${DS_LOKI}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "datasource": {
+                        "type": "loki",
+                        "uid": "${DS_LOKI}"
+                    },
+                    "expr": "{service_name=\"rag-local\"}",
+                    "queryType": "range"
+                }
+            ],
+            "options": {
+                "showTime": true,
+                "showLabels": true,
+                "showCommonLabels": false,
+                "wrapLogMessage": true,
+                "prettifyLogMessage": false,
+                "enableLogDetails": true,
+                "sortOrder": "Descending"
+            }
+        },
+        {
+            "id": 2,
+            "type": "logs",
+            "title": "Errors & Warnings",
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 12
+            },
+            "datasource": {
+                "type": "loki",
+                "uid": "${DS_LOKI}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "datasource": {
+                        "type": "loki",
+                        "uid": "${DS_LOKI}"
+                    },
+                    "expr": "{service_name=\"rag-local\"} | severity=~\"ERROR|WARN\"",
+                    "queryType": "range"
+                }
+            ],
+            "options": {
+                "showTime": true,
+                "showLabels": true,
+                "wrapLogMessage": true,
+                "enableLogDetails": true,
+                "sortOrder": "Descending"
+            }
+        }
+    ],
+    "templating": {
+        "list": [
+            {
+                "name": "DS_LOKI",
+                "type": "datasource",
+                "pluginId": "loki",
+                "current": {
+                    "text": "Loki",
+                    "value": "Loki"
+                }
+            }
+        ]
+    },
+    "time": {
+        "from": "now-1h",
+        "to": "now"
+    },
+    "timepicker": {}
+}
