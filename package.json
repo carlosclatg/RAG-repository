@@ -22,6 +22,7 @@
     "@langchain/core": "^1.1.35",
     "@langchain/langgraph": "^1.2.5",
     "@langchain/langgraph-checkpoint-sqlite": "^1.0.1",
+    "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/api-logs": "^0.214.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.214.0",
     "@opentelemetry/resources": "^2.6.1",

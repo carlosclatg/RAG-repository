@@ -204,7 +204,7 @@ function decideAfterGrading(state: State): string {
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. BUILD THE GRAPH
 // ─────────────────────────────────────────────────────────────────────────────
-const dbPath = 'checkpoints.db';
+const dbPath = './rag-local/checkpoints.db';
 const checkpointer = SqliteSaver.fromConnString(dbPath);
 const graph = new StateGraph(AgentState)
 	.addNode('routeQuestion', routeQuestion)

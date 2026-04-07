@@ -4,7 +4,7 @@ import {
     ConsoleLogRecordExporter,
 } from '@opentelemetry/sdk-logs';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import {
     ATTR_SERVICE_NAME,
     ATTR_SERVICE_VERSION,
@@ -15,20 +15,20 @@ const OTEL_ENDPOINT =
     process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT ??
     'http://localhost:4318/v1/logs';
 
-const resource = new Resource({
+const resource = resourceFromAttributes({
     [ATTR_SERVICE_NAME]: 'rag-local',
     [ATTR_SERVICE_VERSION]: '1.0.0',
 });
 
 const otlpExporter = new OTLPLogExporter({ url: OTEL_ENDPOINT });
 
-const loggerProvider = new LoggerProvider({ resource });
-loggerProvider.addLogRecordProcessor(
-    new BatchLogRecordProcessor(otlpExporter),
-);
-loggerProvider.addLogRecordProcessor(
-    new BatchLogRecordProcessor(new ConsoleLogRecordExporter()),
-);
+const loggerProvider = new LoggerProvider({
+    resource,
+    processors: [
+        new BatchLogRecordProcessor(otlpExporter),
+        new BatchLogRecordProcessor(new ConsoleLogRecordExporter()),
+    ],
+});
 
 logs.setGlobalLoggerProvider(loggerProvider);
 
